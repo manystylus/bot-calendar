@@ -1,3 +1,12 @@
+const express = require('express');
+const app = express();
+
+app.get('/', (req, res) => {
+  res.send('🤖 Bot de calendário está online!');
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`🌐 Servidor web ativo na porta ${PORT}`));
 require('dotenv').config();
 const { 
   Client, 
@@ -239,3 +248,4 @@ client.on('interactionCreate', async (interaction) => {
 });
 
 client.login(token);
+
