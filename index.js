@@ -1,24 +1,14 @@
-const express = require('express');
-const app = express();
-
-app.get('/', (req, res) => {
-  res.send('🤖 Bot de calendário está online!');
-});
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🌐 Servidor web ativo na porta ${PORT}`));
 require('dotenv').config();
-const { 
-  Client, 
-  GatewayIntentBits, 
-  REST, 
-  Routes, 
-  ApplicationCommandOptionType 
-} = require('discord.js');
+const { Client, GatewayIntentBits } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
+const express = require('express'); // opcional se estiver usando Render como Web Service
 
-// --- Configurações ---
+// 🔹 Mini servidor opcional para manter o Render ativo
+const app = express();
+app.get('/', (_, res) => res.send('🤖 Bot de calendário está online!'));
+app.listen(process.env.PORT || 3000);
+
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -28,31 +18,27 @@ const client = new Client({
 });
 
 const channelId = process.env.CHANNEL_ID;
-const token = process.env.TOKEN;
 const eventosFile = path.join(__dirname, 'eventos.json');
 
-// 🗂️ Carrega eventos
+// 🗂️ Carrega eventos salvos
 let eventos = [];
 if (fs.existsSync(eventosFile)) {
-  try {
-    eventos = JSON.parse(fs.readFileSync(eventosFile, 'utf8'));
-  } catch (err) {
-    console.error('Erro ao ler eventos.json', err);
-    eventos = [];
-  }
+  eventos = JSON.parse(fs.readFileSync(eventosFile));
 }
 
+// 💾 Salvar eventos
 function salvarEventos() {
   fs.writeFileSync(eventosFile, JSON.stringify(eventos, null, 2));
 }
 
-// 📅 Gera texto do calendário
+// 📅 Gera o texto do calendário
 function gerarCalendario() {
   const agora = new Date();
   const mes = agora.toLocaleString('pt-BR', { month: 'long' });
   const ano = agora.getFullYear();
 
   let texto = `**📅 ${mes.toUpperCase()} ${ano}**\n\n`;
+
   const eventosDoMes = eventos.filter(ev => {
     const data = new Date(ev.data);
     return data.getMonth() === agora.getMonth() && data.getFullYear() === agora.getFullYear();
@@ -63,9 +49,9 @@ function gerarCalendario() {
   } else {
     eventosDoMes.sort((a, b) => new Date(a.data) - new Date(b.data));
     for (const ev of eventosDoMes) {
-      const data = new Date(ev.data);
-      const dia = data.getDate().toString().padStart(2, '0');
-      texto += `**${dia}** – ${ev.nome}`;
+      const [ano, mes, dia] = ev.data.split('-');
+      const dataBR = `${dia}/${mes}/${ano}`;
+      texto += `**${dataBR}** – ${ev.nome}`;
       if (ev.local || ev.hora) texto += ` (${ev.local || ''} ${ev.hora || ''})`;
       texto += '\n';
     }
@@ -74,178 +60,140 @@ function gerarCalendario() {
   return texto;
 }
 
-// 🔁 Atualiza calendário no canal
+// 🔁 Atualiza o calendário no canal
 async function atualizarCalendario() {
-  try {
-    const canal = await client.channels.fetch(channelId);
-    if (!canal) return console.error(`Canal ${channelId} não encontrado.`);
-    const mensagens = await canal.messages.fetch({ limit: 10 });
-    const msgCalendario = mensagens.find(m => m.author.id === client.user.id);
-    const novoTexto = gerarCalendario();
+  const canal = await client.channels.fetch(channelId);
+  const mensagens = await canal.messages.fetch({ limit: 10 });
+  const msgCalendario = mensagens.find(m => m.author.id === client.user.id);
 
-    if (msgCalendario) {
-      await msgCalendario.edit(novoTexto);
-    } else {
-      await canal.send(novoTexto);
-    }
-  } catch (error) {
-    console.error('Erro ao atualizar calendário:', error);
+  const novoTexto = gerarCalendario();
+
+  if (msgCalendario) {
+    await msgCalendario.edit(novoTexto);
+  } else {
+    await canal.send(novoTexto);
   }
 }
 
-// 🕐 Lembretes automáticos
+// 🕐 Envia lembretes automáticos (diariamente)
 async function verificarLembretes() {
-  const hoje = new Date().toISOString().split('T')[0];
-  const eventosDeHoje = eventos.filter(ev => ev.data === hoje);
+  const hojeISO = new Date().toISOString().split('T')[0];
+  const eventosDeHoje = eventos.filter(ev => ev.data === hojeISO);
 
   if (eventosDeHoje.length > 0) {
     const canal = await client.channels.fetch(channelId);
     for (const ev of eventosDeHoje) {
-      await canal.send(`📣 **Lembrete:** Hoje acontece **${ev.nome}**! ${ev.local ? `📍${ev.local}` : ''} ${ev.hora ? `🕒 ${ev.hora}` : ''}`);
+      const [ano, mes, dia] = ev.data.split('-');
+      const dataBR = `${dia}/${mes}/${ano}`;
+      await canal.send(`📣 **Lembrete:** Hoje (${dataBR}) acontece **${ev.nome}**! ${ev.local ? `📍${ev.local}` : ''} ${ev.hora ? `🕒 ${ev.hora}` : ''}`);
     }
   }
 }
 
-// 📋 Slash Commands
-const COMMANDS = [
-  {
-    name: 'ajuda',
-    description: 'Mostra os comandos disponíveis.'
-  },
-  {
-    name: 'addevento',
-    description: 'Adiciona um novo evento ao calendário.',
-    options: [
-      {
-        name: 'data',
-        description: 'Data do evento (AAAA-MM-DD)',
-        type: ApplicationCommandOptionType.String,
-        required: true
-      },
-      {
-        name: 'nome',
-        description: 'Nome do evento',
-        type: ApplicationCommandOptionType.String,
-        required: true
-      },
-      {
-        name: 'local',
-        description: 'Local do evento',
-        type: ApplicationCommandOptionType.String,
-        required: false
-      },
-      {
-        name: 'hora',
-        description: 'Hora do evento (ex: 14h, 18:30)',
-        type: ApplicationCommandOptionType.String,
-        required: false
-      }
-    ]
-  },
-  {
-    name: 'listeventos',
-    description: 'Lista todos os eventos cadastrados.'
-  },
-  {
-    name: 'removeevento',
-    description: 'Remove um evento pela data.',
-    options: [
-      {
-        name: 'data',
-        description: 'Data do evento (AAAA-MM-DD)',
-        type: ApplicationCommandOptionType.String,
-        required: true
-      }
-    ]
-  }
-];
-
-// 🚀 Inicializa o bot
-client.once('ready', async () => {
+// 🧭 Inicia o bot
+client.once('ready', () => {
   console.log(`✅ Bot logado como ${client.user.tag}`);
-
-  // Registra comandos
-  try {
-    const rest = new REST({ version: '10' }).setToken(token);
-    await rest.put(Routes.applicationCommands(client.user.id), { body: COMMANDS });
-    console.log('✨ Comandos de barra registrados.');
-  } catch (err) {
-    console.error('Erro ao registrar comandos:', err);
-  }
-
   atualizarCalendario();
+
+  // verifica lembretes a cada 6h
   setInterval(verificarLembretes, 6 * 60 * 60 * 1000);
 });
 
-// 🎯 Executa Slash Commands
-client.on('interactionCreate', async (interaction) => {
-  if (!interaction.isChatInputCommand()) return;
-  const { commandName } = interaction;
+// 💬 Comandos
+client.on('messageCreate', async (message) => {
+  if (message.author.bot) return;
 
-  await interaction.deferReply({ ephemeral: false });
+  const args = message.content.split(' ');
+  const comando = args.shift().toLowerCase();
 
-  try {
-    if (commandName === 'ajuda') {
-      const texto = `
+  // !ajuda
+  if (comando === '!ajuda') {
+    const texto = `
 **🧭 COMANDOS DO BOT DE CALENDÁRIO**
 
-📅 \`/addevento\` — Adiciona um novo evento (data, nome, local, hora)
-🗓️ \`/listeventos\` — Mostra todos os eventos futuros
-🗑️ \`/removeevento\` — Remove o evento de uma data
+📅 \`!addevento DD/MM/AAAA Nome | Local | Hora\`
+Adiciona um novo evento.  
+Exemplo: \`!addevento 10/11/2025 Feira Cultural da Véu | Shopping Roma | 14h\`
+
+🗓️ \`!listeventos\`
+Mostra todos os eventos futuros.
+
+🗑️ \`!removeevento DD/MM/AAAA\`
+Remove o evento dessa data.
+
 🕐 O bot avisa automaticamente quando houver um evento no dia!
 `;
-      await interaction.editReply(texto);
+    return message.reply(texto);
+  }
+
+  // !addevento
+  if (comando === '!addevento') {
+    if (args.length < 2) {
+      return message.reply('❌ Use: `!addevento DD/MM/AAAA Nome | Local | Hora`');
     }
 
-    if (commandName === 'addevento') {
-      const data = interaction.options.getString('data');
-      const nome = interaction.options.getString('nome');
-      const local = interaction.options.getString('local') || '';
-      const hora = interaction.options.getString('hora') || '';
-
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(data)) {
-        return interaction.editReply('⚠️ Use o formato de data: AAAA-MM-DD');
-      }
-
-      eventos.push({ data, nome, local, hora });
-      salvarEventos();
-      await atualizarCalendario();
-
-      await interaction.editReply(`✅ Evento adicionado: **${nome}** (${data}) ${local ? `📍${local}` : ''} ${hora ? `🕒${hora}` : ''}`);
+    const data = args.shift();
+    if (!/^\d{2}\/\d{2}\/\d{4}$/.test(data)) {
+      return message.reply('⚠️ Formato de data inválido. Use: DD/MM/AAAA');
     }
 
-    if (commandName === 'listeventos') {
-      if (eventos.length === 0) return interaction.editReply('📭 Nenhum evento cadastrado.');
+    const [dia, mes, ano] = data.split('/');
+    const dataISO = `${ano}-${mes}-${dia}`;
 
-      let texto = '**🗓️ Eventos cadastrados:**\n\n';
-      eventos.sort((a, b) => new Date(a.data) - new Date(b.data)).forEach(ev => {
-        texto += `📅 ${ev.data} — **${ev.nome}**`;
+    const resto = args.join(' ').split('|').map(t => t.trim());
+    const nome = resto[0];
+    const local = resto[1] || '';
+    const hora = resto[2] || '';
+
+    eventos.push({ data: dataISO, nome, local, hora });
+    salvarEventos();
+    await atualizarCalendario();
+
+    message.reply(`✅ Evento adicionado: **${nome}** (${data}) ${local ? `📍${local}` : ''} ${hora ? `🕒${hora}` : ''}`);
+  }
+
+  // !listeventos
+  if (comando === '!listeventos') {
+    if (eventos.length === 0) return message.reply('📭 Nenhum evento cadastrado ainda.');
+
+    let texto = '**🗓️ Eventos cadastrados:**\n\n';
+    eventos
+      .sort((a, b) => new Date(a.data) - new Date(b.data))
+      .forEach(ev => {
+        const [ano, mes, dia] = ev.data.split('-');
+        const dataBR = `${dia}/${mes}/${ano}`;
+        texto += `📅 ${dataBR} — **${ev.nome}**`;
         if (ev.local) texto += ` | 📍${ev.local}`;
         if (ev.hora) texto += ` | 🕒${ev.hora}`;
         texto += '\n';
       });
 
-      await interaction.editReply(texto);
+    message.reply(texto);
+  }
+
+  // !removeevento
+  if (comando === '!removeevento') {
+    const data = args[0];
+    if (!data) return message.reply('❌ Use: `!removeevento DD/MM/AAAA`');
+
+    if (!/^\d{2}\/\d{2}\/\d{4}$/.test(data)) {
+      return message.reply('⚠️ Formato de data inválido. Use: DD/MM/AAAA');
     }
 
-    if (commandName === 'removeevento') {
-      const data = interaction.options.getString('data');
-      const antes = eventos.length;
-      eventos = eventos.filter(ev => ev.data !== data);
+    const [dia, mes, ano] = data.split('/');
+    const dataISO = `${ano}-${mes}-${dia}`;
 
-      if (eventos.length === antes) {
-        return interaction.editReply('⚠️ Nenhum evento encontrado nessa data.');
-      }
-
-      salvarEventos();
-      await atualizarCalendario();
-      await interaction.editReply(`🗑️ Evento removido da data ${data}.`);
+    const antes = eventos.length;
+    eventos = eventos.filter(ev => ev.data !== dataISO);
+    if (eventos.length === antes) {
+      return message.reply('⚠️ Nenhum evento encontrado nessa data.');
     }
-  } catch (error) {
-    console.error(error);
-    await interaction.editReply('❌ Ocorreu um erro ao executar o comando.');
+
+    salvarEventos();
+    await atualizarCalendario();
+
+    message.reply(`🗑️ Evento removido da data ${data}.`);
   }
 });
 
-client.login(token);
-
+client.login(process.env.TOKEN);
